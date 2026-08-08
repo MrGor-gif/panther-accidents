@@ -39,6 +39,7 @@ export default {
       return json({ keys, prefix, shared: true });
     }
 
+    // Not an API route - serve the built static site (index.html, assets/...)
     return env.ASSETS.fetch(request);
   },
 };
