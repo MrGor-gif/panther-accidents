@@ -3,7 +3,7 @@
   "compatibility_date": "2026-08-07",
   "main": "worker.js",
   "assets": {
-    "directory": "./public",
+    "directory": "./",
     "binding": "ASSETS"
   },
   "kv_namespaces": [
