@@ -4,7 +4,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, LineChart, Line, Legend,
 } from "recharts";
-import { AlertTriangle, Search, Filter, TrendingUp, Plus, X, Image as ImageIcon, Calendar, LogIn, ChevronDown, FileWarning } from "lucide-react";
+import { AlertTriangle, Search, Filter, TrendingUp, Plus, X, Image as ImageIcon, Calendar, LogIn, ChevronDown, FileWarning, Trash2, ShieldCheck, ShieldOff } from "lucide-react";
 import crestImg from "./assets/crest.jpeg";
 
 const PLUGOT = ["א", "ב", "ג", "פלס\"ם"];
@@ -26,6 +26,27 @@ const CAUSE_COLORS = ["#E0A32E", "#C4463A", "#4A90A4", "#7B8FA1", "#A3673D", "#5
 
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+// The manager password is stored on this device once entered correctly,
+// and sent to the server with delete requests. The server is the real
+// gatekeeper — it rejects any deletion whose password does not match.
+const ADMIN_TOKEN_LS_KEY = "accident-tracker:admin-token";
+function getAdminToken() {
+  try { return localStorage.getItem(ADMIN_TOKEN_LS_KEY) || null; } catch (e) { return null; }
+}
+function setStoredAdminToken(t) {
+  try { if (t) localStorage.setItem(ADMIN_TOKEN_LS_KEY, t); else localStorage.removeItem(ADMIN_TOKEN_LS_KEY); } catch (e) {}
+}
+async function verifyAdminToken(token) {
+  try {
+    const res = await fetch("/api/admin-check", { headers: token ? { "X-Admin-Token": token } : {} });
+    if (!res.ok) return false;
+    const j = await res.json();
+    return !!j.isAdmin;
+  } catch (e) {
+    return false;
+  }
 }
 
 function resizeImage(file, maxW = 900, quality = 0.72) {
@@ -64,6 +85,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [toast, setToast] = useState(null);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -71,11 +93,29 @@ export default function App() {
         const personal = await window.storage.get("user-name", false);
         if (personal?.value) setUserName(personal.value);
       } catch (e) {}
+
+      // Re-validate a previously entered manager password against the server.
       try {
-        const res = await window.storage.get("accidents", true);
-        if (res?.value) setAccidents(JSON.parse(res.value));
+        const token = getAdminToken();
+        if (token) {
+          const ok = await verifyAdminToken(token);
+          setIsAdmin(ok);
+          if (!ok) setStoredAdminToken(null);
+        }
+      } catch (e) {}
+
+      // Load every accident (one KV record each) in a single request.
+      try {
+        const res = await window.storage.getAll("accident:", true);
+        if (res?.items?.length) {
+          const list = res.items
+            .map((it) => { try { return JSON.parse(it.value); } catch (e) { return null; } })
+            .filter(Boolean)
+            .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+          setAccidents(list);
+        }
       } catch (e) {
-        // key doesn't exist yet - fine
+        // no records yet - fine
       }
       setLoading(false);
     })();
@@ -86,14 +126,46 @@ export default function App() {
     setTimeout(() => setToast(null), 2600);
   };
 
-  const saveAccidents = async (list) => {
-    setAccidents(list);
+  // Add a single accident as its own KV record. This never rewrites other
+  // records, so two people reporting at once can't overwrite each other.
+  const addAccident = async (record) => {
+    setAccidents((prev) => [record, ...prev]);
     try {
-      const result = await window.storage.set("accidents", JSON.stringify(list), true);
+      const result = await window.storage.set("accident:" + record.id, JSON.stringify(record), true);
       if (!result) setError("השמירה נכשלה, נסה שוב");
     } catch (e) {
       setError("שגיאה בשמירת הנתונים");
     }
+  };
+
+  const deleteAccident = async (id) => {
+    const token = getAdminToken();
+    try {
+      await window.storage.delete("accident:" + id, true, token);
+      setAccidents((prev) => prev.filter((a) => a.id !== id));
+      showToast("הדיווח נמחק");
+    } catch (e) {
+      setError("אין הרשאה למחיקה — נדרש מצב מנהל");
+    }
+  };
+
+  const enterAdminMode = async () => {
+    const pw = window.prompt("הזן/י סיסמת מנהל למחיקת דיווחים:");
+    if (pw === null) return;
+    const ok = await verifyAdminToken(pw.trim());
+    if (ok) {
+      setStoredAdminToken(pw.trim());
+      setIsAdmin(true);
+      showToast("מצב מנהל הופעל");
+    } else {
+      setError("סיסמת מנהל שגויה");
+    }
+  };
+
+  const exitAdminMode = () => {
+    setStoredAdminToken(null);
+    setIsAdmin(false);
+    showToast("יצאת ממצב מנהל");
   };
 
   const handleLogin = async () => {
@@ -130,7 +202,7 @@ export default function App() {
         }
       `}</style>
 
-      <TopBar userName={userName} view={view} setView={setView} accidentCount={accidents.length} />
+      <TopBar userName={userName} view={view} setView={setView} accidentCount={accidents.length} isAdmin={isAdmin} onEnterAdmin={enterAdminMode} onExitAdmin={exitAdminMode} />
 
       {toast && (
         <div style={{
@@ -147,14 +219,13 @@ export default function App() {
           <ReportForm
             userName={userName}
             onSubmit={async (record) => {
-              const list = [record, ...accidents];
-              await saveAccidents(list);
+              await addAccident(record);
               showToast("הדיווח נשמר בהצלחה");
               setView("database");
             }}
           />
         )}
-        {view === "database" && <DatabaseView accidents={accidents} />}
+        {view === "database" && <DatabaseView accidents={accidents} isAdmin={isAdmin} onDelete={deleteAccident} />}
         {view === "analytics" && <AnalyticsView accidents={accidents} />}
       </main>
 
@@ -215,7 +286,7 @@ function LoginScreen({ nameInput, setNameInput, onLogin }) {
   );
 }
 
-function TopBar({ userName, view, setView, accidentCount }) {
+function TopBar({ userName, view, setView, accidentCount, isAdmin, onEnterAdmin, onExitAdmin }) {
   const tabs = [
     { id: "home", label: "דיווח תאונה", icon: Plus },
     { id: "database", label: "מאגר תאונות", icon: Search },
@@ -254,8 +325,33 @@ function TopBar({ userName, view, setView, accidentCount }) {
           })}
         </nav>
 
-        <div style={{ marginRight: "auto", fontSize: 12.5, color: MUTED, display: "flex", alignItems: "center", gap: 6 }}>
-          מחובר/ת: <span style={{ color: TEXT, fontWeight: 600 }}>{userName}</span>
+        <div style={{ marginRight: "auto", fontSize: 12.5, color: MUTED, display: "flex", alignItems: "center", gap: 12 }}>
+          {isAdmin ? (
+            <button
+              onClick={onExitAdmin}
+              title="יציאה ממצב מנהל"
+              style={{
+                display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 7,
+                border: `1px solid ${ACCENT}`, background: `${ACCENT}1c`, color: ACCENT, fontSize: 12.5, fontWeight: 700,
+              }}
+            >
+              <ShieldCheck size={14} /> מצב מנהל
+            </button>
+          ) : (
+            <button
+              onClick={onEnterAdmin}
+              title="כניסה למצב מנהל (למחיקת דיווחים)"
+              style={{
+                display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 7,
+                border: `1px solid ${BORDER}`, background: SURFACE2, color: MUTED, fontSize: 12.5, fontWeight: 600,
+              }}
+            >
+              <ShieldOff size={14} /> מצב מנהל
+            </button>
+          )}
+          <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            מחובר/ת: <span style={{ color: TEXT, fontWeight: 600 }}>{userName}</span>
+          </span>
         </div>
       </div>
     </div>
@@ -268,7 +364,10 @@ function ReportForm({ userName, onSubmit }) {
   const [date, setDate] = useState(today);
   const [pluga, setPluga] = useState("");
   const [causes, setCauses] = useState([]);
+  const [hasDamage, setHasDamage] = useState(null);
   const [damage, setDamage] = useState("");
+  const [hasCasualties, setHasCasualties] = useState(null);
+  const [casualties, setCasualties] = useState("");
   const [image, setImage] = useState(null);
   const [imageProcessing, setImageProcessing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -292,7 +391,7 @@ function ReportForm({ userName, onSubmit }) {
     setImageProcessing(false);
   };
 
-  const valid = title.trim() && date && pluga && causes.length > 0;
+  const valid = title.trim() && date && pluga && causes.length > 0 && hasDamage !== null && hasCasualties !== null;
 
   const handleSubmit = async () => {
     setTouched(true);
@@ -300,11 +399,15 @@ function ReportForm({ userName, onSubmit }) {
     setSubmitting(true);
     const record = {
       id: uid(),
-      title: title.trim(), date, pluga, causes, damage: damage.trim(), image,
-      reporter: userName, createdAt: new Date().toISOString(),
+      title: title.trim(), date, pluga, causes,
+      hasDamage, damage: hasDamage ? damage.trim() : "",
+      hasCasualties, casualties: hasCasualties ? casualties.trim() : "",
+      image, reporter: userName, createdAt: new Date().toISOString(),
     };
     await onSubmit(record);
-    setTitle(""); setDate(today); setPluga(""); setCauses([]); setDamage(""); setImage(null); setTouched(false);
+    setTitle(""); setDate(today); setPluga(""); setCauses([]);
+    setHasDamage(null); setDamage(""); setHasCasualties(null); setCasualties("");
+    setImage(null); setTouched(false);
     setSubmitting(false);
   };
 
@@ -366,15 +469,38 @@ function ReportForm({ userName, onSubmit }) {
           </div>
         </Field>
 
-        <Field label="תיאור הנזק">
-          <textarea
-            value={damage}
-            onChange={(e) => setDamage(e.target.value)}
-            placeholder="תיאור הנזק שנגרם, ציוד מעורב, פציעות וכו׳"
-            rows={4}
-            style={{ ...inputStyle, resize: "vertical", lineHeight: 1.6 }}
-          />
-        </Field>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+          <Field label="נזק *" error={touched && hasDamage === null}>
+            <YesNo value={hasDamage} onChange={setHasDamage} />
+          </Field>
+          <Field label="נפגעים *" error={touched && hasCasualties === null}>
+            <YesNo value={hasCasualties} onChange={setHasCasualties} />
+          </Field>
+        </div>
+
+        {hasDamage === true && (
+          <Field label="פירוט הנזק">
+            <textarea
+              value={damage}
+              onChange={(e) => setDamage(e.target.value)}
+              placeholder="תיאור הנזק שנגרם, ציוד מעורב וכו׳"
+              rows={3}
+              style={{ ...inputStyle, resize: "vertical", lineHeight: 1.6 }}
+            />
+          </Field>
+        )}
+
+        {hasCasualties === true && (
+          <Field label="פירוט נפגעים">
+            <textarea
+              value={casualties}
+              onChange={(e) => setCasualties(e.target.value)}
+              placeholder="פרטי הנפגעים, חומרת הפגיעה, טיפול שניתן וכו׳"
+              rows={3}
+              style={{ ...inputStyle, resize: "vertical", lineHeight: 1.6 }}
+            />
+          </Field>
+        )}
 
         <Field label="תמונה מהאירוע (אופציונלי)">
           <input ref={fileRef} type="file" accept="image/*" onChange={handleImage} style={{ display: "none" }} />
@@ -424,6 +550,29 @@ function ReportForm({ userName, onSubmit }) {
   );
 }
 
+function YesNo({ value, onChange }) {
+  const opt = (val, label) => (
+    <button
+      type="button"
+      onClick={() => onChange(val)}
+      style={{
+        flex: 1, padding: "10px 0", borderRadius: 8,
+        border: `1px solid ${value === val ? ACCENT : BORDER}`,
+        background: value === val ? `${ACCENT}22` : SURFACE2,
+        color: value === val ? ACCENT : TEXT, fontWeight: value === val ? 700 : 500, fontSize: 14,
+      }}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div style={{ display: "flex", gap: 8 }}>
+      {opt(true, "יש")}
+      {opt(false, "אין")}
+    </div>
+  );
+}
+
 function Field({ label, error, children }) {
   return (
     <div>
@@ -454,7 +603,7 @@ function PageHeader({ icon: Icon, title, subtitle }) {
   );
 }
 
-function DatabaseView({ accidents }) {
+function DatabaseView({ accidents, isAdmin, onDelete }) {
   const [keyword, setKeyword] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -467,7 +616,7 @@ function DatabaseView({ accidents }) {
     return accidents.filter((a) => {
       if (keyword.trim()) {
         const k = keyword.trim().toLowerCase();
-        const hay = `${a.title || ""} ${a.damage || ""} ${a.pluga} ${a.causes.join(" ")} ${a.reporter || ""}`.toLowerCase();
+        const hay = `${a.title || ""} ${a.damage || ""} ${a.casualties || ""} ${a.pluga} ${a.causes.join(" ")} ${a.reporter || ""}`.toLowerCase();
         if (!hay.includes(k)) return false;
       }
       if (dateFrom && a.date < dateFrom) return false;
@@ -559,7 +708,7 @@ function DatabaseView({ accidents }) {
       ) : (
         <div style={{ display: "grid", gap: 10 }}>
           {filtered.map((a) => (
-            <AccidentCard key={a.id} a={a} expanded={expanded === a.id} onToggle={() => setExpanded(expanded === a.id ? null : a.id)} />
+            <AccidentCard key={a.id} a={a} expanded={expanded === a.id} onToggle={() => setExpanded(expanded === a.id ? null : a.id)} isAdmin={isAdmin} onDelete={onDelete} />
           ))}
         </div>
       )}
@@ -567,7 +716,10 @@ function DatabaseView({ accidents }) {
   );
 }
 
-function AccidentCard({ a, expanded, onToggle }) {
+function AccidentCard({ a, expanded, onToggle, isAdmin, onDelete }) {
+  // Backward compatible with older records that only had a free-text damage field.
+  const hasDamage = a.hasDamage === true || (a.hasDamage === undefined && !!a.damage);
+  const hasCasualties = a.hasCasualties === true || (a.hasCasualties === undefined && !!a.casualties);
   return (
     <div style={{ background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 12, overflow: "hidden" }}>
       <button
@@ -594,6 +746,11 @@ function AccidentCard({ a, expanded, onToggle }) {
               ))}
               {!expanded && a.causes.length > 2 && <span style={{ fontSize: 11.5, color: MUTED }}>+{a.causes.length - 2}</span>}
             </div>
+            {hasCasualties && (
+              <span style={{ fontSize: 11.5, padding: "3px 9px", borderRadius: 12, background: `${DANGER}22`, color: DANGER, border: `1px solid ${DANGER}`, fontWeight: 600 }}>
+                נפגעים
+              </span>
+            )}
           </div>
         </div>
         {a.image && <ImageIcon size={15} color={MUTED} style={{ flexShrink: 0 }} />}
@@ -601,16 +758,45 @@ function AccidentCard({ a, expanded, onToggle }) {
       </button>
       {expanded && (
         <div style={{ padding: "0 18px 18px", display: "grid", gap: 12 }}>
-          {a.damage && (
+          <div style={{ display: "flex", gap: 28, flexWrap: "wrap" }}>
             <div>
-              <div style={{ fontSize: 11.5, color: MUTED, marginBottom: 4 }}>תיאור הנזק</div>
+              <div style={{ fontSize: 11.5, color: MUTED, marginBottom: 4 }}>נזק</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: hasDamage ? ACCENT : MUTED }}>{hasDamage ? "יש" : "אין"}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11.5, color: MUTED, marginBottom: 4 }}>נפגעים</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: hasCasualties ? DANGER : MUTED }}>{hasCasualties ? "יש" : "אין"}</div>
+            </div>
+          </div>
+          {hasDamage && a.damage && (
+            <div>
+              <div style={{ fontSize: 11.5, color: MUTED, marginBottom: 4 }}>פירוט הנזק</div>
               <div style={{ fontSize: 14, lineHeight: 1.6 }}>{a.damage}</div>
+            </div>
+          )}
+          {hasCasualties && a.casualties && (
+            <div>
+              <div style={{ fontSize: 11.5, color: MUTED, marginBottom: 4 }}>פירוט נפגעים</div>
+              <div style={{ fontSize: 14, lineHeight: 1.6 }}>{a.casualties}</div>
             </div>
           )}
           {a.image && (
             <img src={a.image} alt="תמונה מהאירוע" style={{ maxHeight: 260, borderRadius: 8, border: `1px solid ${BORDER}` }} />
           )}
-          <div style={{ fontSize: 12, color: MUTED }}>דווח ע״י {a.reporter || "לא ידוע"}</div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+            <div style={{ fontSize: 12, color: MUTED }}>דווח ע״י {a.reporter || "לא ידוע"}</div>
+            {isAdmin && (
+              <button
+                onClick={() => { if (window.confirm("למחוק את הדיווח לצמיתות? פעולה זו אינה הפיכה.")) onDelete(a.id); }}
+                style={{
+                  display: "flex", alignItems: "center", gap: 7, padding: "7px 14px", borderRadius: 8,
+                  border: `1px solid ${DANGER}`, background: `${DANGER}1c`, color: DANGER, fontSize: 13, fontWeight: 600,
+                }}
+              >
+                <Trash2 size={14} /> מחק דיווח
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -627,31 +813,95 @@ function EmptyState({ text }) {
 }
 
 function AnalyticsView({ accidents }) {
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+
+  const filtered = useMemo(() => {
+    return accidents.filter((a) => {
+      if (dateFrom && (!a.date || a.date < dateFrom)) return false;
+      if (dateTo && (!a.date || a.date > dateTo)) return false;
+      return true;
+    });
+  }, [accidents, dateFrom, dateTo]);
+
   const byCause = useMemo(() => {
     const map = {};
     CAUSES.forEach((c) => (map[c] = 0));
-    accidents.forEach((a) => a.causes.forEach((c) => { map[c] = (map[c] || 0) + 1; }));
+    filtered.forEach((a) => a.causes.forEach((c) => { map[c] = (map[c] || 0) + 1; }));
     return CAUSES.map((c) => ({ name: c, value: map[c] })).sort((a, b) => b.value - a.value);
-  }, [accidents]);
+  }, [filtered]);
 
   const byPluga = useMemo(() => {
     const map = {};
     PLUGOT.forEach((p) => (map[p] = 0));
-    accidents.forEach((a) => { map[a.pluga] = (map[a.pluga] || 0) + 1; });
+    filtered.forEach((a) => { map[a.pluga] = (map[a.pluga] || 0) + 1; });
     return PLUGOT.map((p) => ({ name: p, value: map[p] }));
-  }, [accidents]);
+  }, [filtered]);
 
   const byMonth = useMemo(() => {
     const map = {};
-    accidents.forEach((a) => {
+    filtered.forEach((a) => {
       if (!a.date) return;
       const key = a.date.slice(0, 7);
       map[key] = (map[key] || 0) + 1;
     });
     return Object.entries(map).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => ({ month: k, count: v }));
-  }, [accidents]);
+  }, [filtered]);
 
   const topCause = byCause[0];
+
+  const setPreset = (days) => {
+    const to = new Date();
+    const from = new Date();
+    from.setDate(from.getDate() - days + 1);
+    setDateFrom(from.toISOString().slice(0, 10));
+    setDateTo(to.toISOString().slice(0, 10));
+  };
+  const setThisYear = () => {
+    const y = new Date().getFullYear();
+    setDateFrom(`${y}-01-01`);
+    setDateTo(`${y}-12-31`);
+  };
+  const clearRange = () => { setDateFrom(""); setDateTo(""); };
+  const rangeActive = !!(dateFrom || dateTo);
+
+  const presetBtn = (label, onClick) => (
+    <button
+      onClick={onClick}
+      style={{
+        padding: "7px 14px", borderRadius: 18, border: `1px solid ${BORDER}`,
+        background: SURFACE2, color: TEXT, fontSize: 12.5, fontWeight: 600,
+      }}
+    >
+      {label}
+    </button>
+  );
+
+  const rangeBar = (
+    <div style={{ background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 14, padding: 18, marginBottom: 18 }}>
+      <div style={{ display: "flex", alignItems: "flex-end", gap: 16, flexWrap: "wrap" }}>
+        <Field label="מתאריך">
+          <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={{ ...inputStyle, width: 170 }} />
+        </Field>
+        <Field label="עד תאריך">
+          <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={{ ...inputStyle, width: 170 }} />
+        </Field>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", paddingBottom: 2 }}>
+          {presetBtn("30 יום אחרונים", () => setPreset(30))}
+          {presetBtn("90 יום אחרונים", () => setPreset(90))}
+          {presetBtn("השנה", setThisYear)}
+          {rangeActive && (
+            <button onClick={clearRange} style={{ background: "none", border: "none", color: MUTED, fontSize: 13, textDecoration: "underline" }}>
+              נקה טווח
+            </button>
+          )}
+        </div>
+        <div style={{ marginRight: "auto", fontSize: 12.5, color: MUTED, paddingBottom: 4 }}>
+          {rangeActive ? `${filtered.length} תאונות בטווח` : `כל התאונות (${accidents.length})`}
+        </div>
+      </div>
+    </div>
+  );
 
   if (accidents.length === 0) {
     return (
@@ -666,10 +916,16 @@ function AnalyticsView({ accidents }) {
     <div>
       <PageHeader icon={TrendingUp} title="ניתוח נתונים" subtitle="תובנות מתוך מאגר התאונות" />
 
+      {rangeBar}
+
+      {filtered.length === 0 ? (
+        <EmptyState text="אין תאונות בטווח התאריכים שנבחר" />
+      ) : (
+      <>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginBottom: 22 }}>
-        <StatCard label="סה״כ תאונות" value={accidents.length} />
+        <StatCard label="סה״כ תאונות בטווח" value={filtered.length} />
         <StatCard label="הגורם השכיח ביותר" value={topCause?.value ? topCause.name : "-"} small />
-        <StatCard label="חודשים במאגר" value={byMonth.length} />
+        <StatCard label="חודשים בטווח" value={byMonth.length} />
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 16, marginBottom: 16 }}>
@@ -710,6 +966,8 @@ function AnalyticsView({ accidents }) {
           </LineChart>
         </ResponsiveContainer>
       </ChartCard>
+      </>
+      )}
     </div>
   );
 }

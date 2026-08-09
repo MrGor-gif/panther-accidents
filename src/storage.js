@@ -43,14 +43,22 @@ async function apiSet(key, value) {
   if (!res.ok) throw new Error("storage POST failed");
   return res.json();
 }
-async function apiDelete(key) {
-  const res = await fetch(`/api/storage?key=${encodeURIComponent(key)}`, { method: "DELETE" });
+async function apiDelete(key, adminToken) {
+  const headers = {};
+  if (adminToken) headers["X-Admin-Token"] = adminToken;
+  const res = await fetch(`/api/storage?key=${encodeURIComponent(key)}`, { method: "DELETE", headers });
+  if (res.status === 403) throw new Error("forbidden");
   if (!res.ok) throw new Error("storage DELETE failed");
   return res.json();
 }
 async function apiList(prefix) {
   const res = await fetch(`/api/storage-list?prefix=${encodeURIComponent(prefix || "")}`);
   if (!res.ok) throw new Error("storage LIST failed");
+  return res.json();
+}
+async function apiGetAll(prefix) {
+  const res = await fetch(`/api/storage-getall?prefix=${encodeURIComponent(prefix || "")}`);
+  if (!res.ok) throw new Error("storage GETALL failed");
   return res.json();
 }
 
@@ -85,7 +93,7 @@ const storage = {
       return { key, value, shared: false };
     }
   },
-  async delete(key, shared = false) {
+  async delete(key, shared = false, adminToken = null) {
     if (!shared) {
       const all = localReadAll();
       const existed = key in all;
@@ -93,11 +101,9 @@ const storage = {
       localWriteAll(all);
       return { key, deleted: existed, shared: false };
     }
-    try {
-      return await apiDelete(key);
-    } catch (e) {
-      return { key, deleted: false, shared: true };
-    }
+    // For shared deletes we let errors propagate so the UI can tell the
+    // difference between success and a rejected (forbidden) request.
+    return await apiDelete(key, adminToken);
   },
   async list(prefix = "", shared = false) {
     if (!shared) {
@@ -108,6 +114,24 @@ const storage = {
       return await apiList(prefix);
     } catch (e) {
       return { keys: [], prefix, shared: true };
+    }
+  },
+  async getAll(prefix = "", shared = false) {
+    if (!shared) {
+      const all = localReadAll();
+      const items = Object.keys(all)
+        .filter((k) => k.startsWith(prefix))
+        .map((k) => ({ key: k, value: all[k] }));
+      return { items, prefix, shared: false };
+    }
+    try {
+      return await apiGetAll(prefix);
+    } catch (e) {
+      const all = localReadAll();
+      const items = Object.keys(all)
+        .filter((k) => k.startsWith(prefix))
+        .map((k) => ({ key: k, value: all[k] }));
+      return { items, prefix, shared: false };
     }
   },
 };
