@@ -7,11 +7,13 @@ import {
 import { AlertTriangle, Search, Filter, TrendingUp, Plus, X, Image as ImageIcon, Calendar, LogIn, ChevronDown, FileWarning, Trash2, ShieldCheck, ShieldOff } from "lucide-react";
 import crestImg from "./assets/crest.jpeg";
 
-const PLUGOT = ["א", "ב", "ג", "פלס\"ם"];
+const PLUGOT = ["א", "ב", "ג", "פלס\"ם", "מסלול", "מפג\"ד"];
 const CAUSES = [
   "אי קריאת שטח", "מכוון לקוי", "אי ביצוע מכוון", "עייפות",
   "אי שמירת מרחק", "חוסר מקצועיות", "רשלנות", "גורם חיצוני", "לא ידוע",
 ];
+const SEVERITIES = ["קל", "בינוני", "חמור"];
+const SEVERITY_COLORS = { "קל": "#5C7A5C", "בינוני": "#E0A32E", "חמור": "#C4463A" };
 
 const ACCENT = "#E0A32E";
 const DANGER = "#C4463A";
@@ -363,6 +365,8 @@ function ReportForm({ userName, onSubmit }) {
   const [title, setTitle] = useState("");
   const [date, setDate] = useState(today);
   const [pluga, setPluga] = useState("");
+  const [vehicle, setVehicle] = useState("");
+  const [severity, setSeverity] = useState("");
   const [causes, setCauses] = useState([]);
   const [hasDamage, setHasDamage] = useState(null);
   const [damage, setDamage] = useState("");
@@ -391,7 +395,7 @@ function ReportForm({ userName, onSubmit }) {
     setImageProcessing(false);
   };
 
-  const valid = title.trim() && date && pluga && causes.length > 0 && hasDamage !== null && hasCasualties !== null;
+  const valid = title.trim() && date && pluga && severity && causes.length > 0 && hasDamage !== null && hasCasualties !== null;
 
   const handleSubmit = async () => {
     setTouched(true);
@@ -399,13 +403,13 @@ function ReportForm({ userName, onSubmit }) {
     setSubmitting(true);
     const record = {
       id: uid(),
-      title: title.trim(), date, pluga, causes,
+      title: title.trim(), date, pluga, vehicle: vehicle.trim(), severity, causes,
       hasDamage, damage: hasDamage ? damage.trim() : "",
       hasCasualties, casualties: hasCasualties ? casualties.trim() : "",
       image, reporter: userName, createdAt: new Date().toISOString(),
     };
     await onSubmit(record);
-    setTitle(""); setDate(today); setPluga(""); setCauses([]);
+    setTitle(""); setDate(today); setPluga(""); setVehicle(""); setSeverity(""); setCauses([]);
     setHasDamage(null); setDamage(""); setHasCasualties(null); setCasualties("");
     setImage(null); setTouched(false);
     setSubmitting(false);
@@ -429,24 +433,50 @@ function ReportForm({ userName, onSubmit }) {
           <Field label="תאריך התאונה *" error={touched && !date}>
             <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={inputStyle} />
           </Field>
-          <Field label="פלוגה *" error={touched && !pluga}>
-            <div style={{ display: "flex", gap: 8 }}>
-              {PLUGOT.map((p) => (
-                <button
-                  key={p}
-                  onClick={() => setPluga(p)}
-                  style={{
-                    flex: 1, padding: "10px 0", borderRadius: 8, border: `1px solid ${pluga === p ? ACCENT : BORDER}`,
-                    background: pluga === p ? `${ACCENT}22` : SURFACE2, color: pluga === p ? ACCENT : TEXT,
-                    fontWeight: pluga === p ? 700 : 500, fontSize: 14,
-                  }}
-                >
-                  {p}
-                </button>
-              ))}
-            </div>
+          <Field label="צ' רכב (אם רלוונטי)">
+            <input value={vehicle} onChange={(e) => setVehicle(e.target.value)} placeholder="מספר צ' של הרכב המעורב" style={inputStyle} />
           </Field>
         </div>
+
+        <Field label="פלוגה *" error={touched && !pluga}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {PLUGOT.map((p) => (
+              <button
+                key={p}
+                onClick={() => setPluga(p)}
+                style={{
+                  minWidth: 72, flex: "1 1 72px", padding: "10px 12px", borderRadius: 8, border: `1px solid ${pluga === p ? ACCENT : BORDER}`,
+                  background: pluga === p ? `${ACCENT}22` : SURFACE2, color: pluga === p ? ACCENT : TEXT,
+                  fontWeight: pluga === p ? 700 : 500, fontSize: 14,
+                }}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+        </Field>
+
+        <Field label="חומרת אירוע *" error={touched && !severity}>
+          <div style={{ display: "flex", gap: 8 }}>
+            {SEVERITIES.map((s) => {
+              const on = severity === s;
+              const col = SEVERITY_COLORS[s];
+              return (
+                <button
+                  key={s}
+                  onClick={() => setSeverity(s)}
+                  style={{
+                    flex: 1, padding: "10px 0", borderRadius: 8, border: `1px solid ${on ? col : BORDER}`,
+                    background: on ? `${col}22` : SURFACE2, color: on ? col : TEXT,
+                    fontWeight: on ? 700 : 500, fontSize: 14,
+                  }}
+                >
+                  {s}
+                </button>
+              );
+            })}
+          </div>
+        </Field>
 
         <Field label="גורמים לתאונה * (ניתן לבחור יותר מאחד)" error={touched && causes.length === 0}>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
@@ -608,6 +638,7 @@ function DatabaseView({ accidents, isAdmin, onDelete }) {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [pluga, setPluga] = useState("");
+  const [severity, setSeverity] = useState("");
   const [causeFilter, setCauseFilter] = useState([]);
   const [showFilters, setShowFilters] = useState(false);
   const [expanded, setExpanded] = useState(null);
@@ -616,20 +647,21 @@ function DatabaseView({ accidents, isAdmin, onDelete }) {
     return accidents.filter((a) => {
       if (keyword.trim()) {
         const k = keyword.trim().toLowerCase();
-        const hay = `${a.title || ""} ${a.damage || ""} ${a.casualties || ""} ${a.pluga} ${a.causes.join(" ")} ${a.reporter || ""}`.toLowerCase();
+        const hay = `${a.title || ""} ${a.damage || ""} ${a.casualties || ""} ${a.pluga} ${a.vehicle || ""} ${a.severity || ""} ${a.causes.join(" ")} ${a.reporter || ""}`.toLowerCase();
         if (!hay.includes(k)) return false;
       }
       if (dateFrom && a.date < dateFrom) return false;
       if (dateTo && a.date > dateTo) return false;
       if (pluga && a.pluga !== pluga) return false;
+      if (severity && a.severity !== severity) return false;
       if (causeFilter.length > 0 && !causeFilter.some((c) => a.causes.includes(c))) return false;
       return true;
     });
-  }, [accidents, keyword, dateFrom, dateTo, pluga, causeFilter]);
+  }, [accidents, keyword, dateFrom, dateTo, pluga, severity, causeFilter]);
 
   const toggleCauseFilter = (c) => setCauseFilter((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]));
-  const clearFilters = () => { setKeyword(""); setDateFrom(""); setDateTo(""); setPluga(""); setCauseFilter([]); };
-  const activeFilterCount = [dateFrom, dateTo, pluga].filter(Boolean).length + causeFilter.length;
+  const clearFilters = () => { setKeyword(""); setDateFrom(""); setDateTo(""); setPluga(""); setSeverity(""); setCauseFilter([]); };
+  const activeFilterCount = [dateFrom, dateTo, pluga, severity].filter(Boolean).length + causeFilter.length;
 
   return (
     <div>
@@ -642,7 +674,7 @@ function DatabaseView({ accidents, isAdmin, onDelete }) {
             <input
               value={keyword}
               onChange={(e) => setKeyword(e.target.value)}
-              placeholder="חיפוש חופשי בתיאור, פלוגה, גורם או מדווח..."
+              placeholder="חיפוש חופשי בכותרת, תיאור, פלוגה, צ' רכב, גורם או מדווח..."
               style={{ ...inputStyle, paddingRight: 38 }}
             />
           </div>
@@ -675,6 +707,26 @@ function DatabaseView({ accidents, isAdmin, onDelete }) {
                 </select>
               </Field>
             </div>
+            <Field label="חומרת אירוע">
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {SEVERITIES.map((s) => {
+                  const on = severity === s;
+                  const col = SEVERITY_COLORS[s];
+                  return (
+                    <button
+                      key={s}
+                      onClick={() => setSeverity(on ? "" : s)}
+                      style={{
+                        padding: "6px 16px", borderRadius: 18, border: `1px solid ${on ? col : BORDER}`,
+                        background: on ? `${col}22` : SURFACE2, color: on ? col : MUTED, fontSize: 12.5, fontWeight: on ? 700 : 500,
+                      }}
+                    >
+                      {s}
+                    </button>
+                  );
+                })}
+              </div>
+            </Field>
             <Field label="גורמים">
               <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
                 {CAUSES.map((c) => {
@@ -740,6 +792,11 @@ function AccidentCard({ a, expanded, onToggle, isAdmin, onDelete }) {
             <span style={{ display: "flex", alignItems: "center", gap: 5, color: MUTED, fontSize: 12.5 }}>
               <Calendar size={13} /> {fmtDate(a.date)}
             </span>
+            {a.severity && (
+              <span style={{ fontSize: 11.5, padding: "3px 10px", borderRadius: 12, background: `${SEVERITY_COLORS[a.severity]}22`, color: SEVERITY_COLORS[a.severity], border: `1px solid ${SEVERITY_COLORS[a.severity]}`, fontWeight: 700 }}>
+                {a.severity}
+              </span>
+            )}
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               {a.causes.slice(0, expanded ? undefined : 2).map((c) => (
                 <span key={c} style={{ fontSize: 11.5, padding: "3px 9px", borderRadius: 12, background: SURFACE2, color: MUTED, border: `1px solid ${BORDER}` }}>{c}</span>
@@ -759,6 +816,22 @@ function AccidentCard({ a, expanded, onToggle, isAdmin, onDelete }) {
       {expanded && (
         <div style={{ padding: "0 18px 18px", display: "grid", gap: 12 }}>
           <div style={{ display: "flex", gap: 28, flexWrap: "wrap" }}>
+            <div>
+              <div style={{ fontSize: 11.5, color: MUTED, marginBottom: 4 }}>פלוגה</div>
+              <div style={{ fontSize: 14, fontWeight: 700 }}>{a.pluga}</div>
+            </div>
+            {a.severity && (
+              <div>
+                <div style={{ fontSize: 11.5, color: MUTED, marginBottom: 4 }}>חומרת אירוע</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: SEVERITY_COLORS[a.severity] }}>{a.severity}</div>
+              </div>
+            )}
+            {a.vehicle && (
+              <div>
+                <div style={{ fontSize: 11.5, color: MUTED, marginBottom: 4 }}>צ' רכב</div>
+                <div style={{ fontSize: 14, fontWeight: 700 }}>{a.vehicle}</div>
+              </div>
+            )}
             <div>
               <div style={{ fontSize: 11.5, color: MUTED, marginBottom: 4 }}>נזק</div>
               <div style={{ fontSize: 14, fontWeight: 700, color: hasDamage ? ACCENT : MUTED }}>{hasDamage ? "יש" : "אין"}</div>
